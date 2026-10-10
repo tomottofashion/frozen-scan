@@ -22,7 +22,7 @@
   .warn{font-size:12px;color:var(--warn);line-height:1.6;margin-top:24px}
   p,.body{font-size:15px;line-height:1.7;margin:0;white-space:pre-wrap}
   label{display:block;font-size:13px;color:var(--sub);margin:16px 0 4px}
-  input,textarea{width:100%;font:inherit;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
+  input,textarea,select{width:100%;font:inherit;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
   textarea{height:110px}
   button{font:inherit;font-size:16px;font-weight:600;border:0;border-radius:10px;padding:14px;width:100%;margin-top:12px;background:var(--accent);color:#fff}
   button.ghost{background:transparent;color:var(--accent)}
@@ -298,17 +298,82 @@ function renderFree(){
   };
 }
 
-/* ---------- 画面: 目標値 ---------- */
+/* ---------- 画面: 目標値(身長・体重から目安を計算) ---------- */
+// 身体活動レベル(日本人の食事摂取基準の区分I・II・IIIに相当)
+const ACTS = {
+  low:  ['低い(ほぼ座って過ごす)', 1.50],
+  mid:  ['ふつう(通勤・家事・軽い運動)', 1.75],
+  high: ['高い(立ち仕事・運動習慣が多い)', 2.00]
+};
+// 基礎代謝基準値(kcal/kg/日): [年齢の上限(未満), 値]
+const BMR_M = [[30, 23.7], [50, 22.5], [65, 21.8], [75, 21.6], [200, 21.5]];
+const BMR_F = [[30, 22.1], [50, 21.7], [65, 20.7], [75, 20.7], [200, 20.7]];
+function calcTargets(pr){
+  const hm = pr.height / 100;
+  const bmi = pr.weight / (hm * hm);
+  const std = 22 * hm * hm; // 標準体重(BMI 22)
+  const base = (pr.sex === 'm' ? BMR_M : BMR_F).find(([lim]) => pr.age < lim)[1];
+  const bmr = base * pr.weight;
+  const kcal = Math.round(bmr * ACTS[pr.act][1] / 10) * 10;
+  const cat = bmi < 18.5 ? '低体重(やせ)' : bmi < 25 ? '普通体重' : '肥満(1度以上)';
+  return {
+    bmi: r1(bmi), std: r1(std), cat, bmr: Math.round(bmr),
+    t: {
+      kcal,
+      protein: Math.round(kcal * 0.15 / 4), // エネルギーの15%
+      fat: Math.round(kcal * 0.25 / 9),     // エネルギーの25%
+      carbs: Math.round(kcal * 0.60 / 4),   // エネルギーの60%
+      salt: pr.sex === 'm' ? 7.5 : 6.5
+    }
+  };
+}
 function renderSettings(){
-  const t = settings.get();
+  const t = settings.get(), pr = t.profile || {};
   app.innerHTML = `<div class="page"><h1>1日の目標値</h1>
-    <p class="meta" style="line-height:1.6">初期値は一般的な目安です。医師や管理栄養士から指示がある場合は、その値を入れてください。</p>
+    <h2>身長・体重から目安を計算</h2>
+    <label>性別</label>
+    <select id="f_sex"><option value="m">男性</option><option value="f">女性</option></select>
+    <label>年齢(18歳以上)</label><input id="f_age" inputmode="numeric" value="${esc(pr.age)}">
+    <label>身長 (cm)</label><input id="f_height" inputmode="decimal" value="${esc(pr.height)}">
+    <label>体重 (kg)</label><input id="f_weight" inputmode="decimal" value="${esc(pr.weight)}">
+    <label>1日の活動量</label>
+    <select id="f_act">${Object.entries(ACTS).map(([k, [l]]) => `<option value="${k}">${l}</option>`).join('')}</select>
+    <button id="bCalc" class="ghost" style="border:1px solid var(--accent)">BMIと目安を計算</button>
+    <div class="card" id="calcOut" hidden></div>
+    <h2>目標値</h2>
+    <p class="meta" style="line-height:1.6">医師や管理栄養士から指示がある場合は、その値を入れてください。</p>
     ${NUT.map(([k, l, u]) => nf(k, `${l} (${u})`, t[k])).join('')}
     <button id="bSetSave">保存</button>
     <button id="bSetCancel" class="ghost">キャンセル</button></div>`;
+  $('#f_sex').value = pr.sex || 'm';
+  $('#f_act').value = pr.act || 'mid';
+
+  const readProfile = () => ({ sex: $('#f_sex').value, age: numOf('age'), height: numOf('height'), weight: numOf('weight'), act: $('#f_act').value });
+  const valid = (p) => p.age >= 18 && p.age <= 120 && p.height >= 100 && p.height <= 250 && p.weight >= 20 && p.weight <= 300;
+
+  $('#bCalc').onclick = () => {
+    const p = readProfile();
+    if (!valid(p)) return toast('年齢(18歳以上)、身長(100〜250cm)、体重(20〜300kg)を入力してください');
+    const r = calcTargets(p);
+    const out = $('#calcOut'); out.hidden = false;
+    out.innerHTML = `<b>BMI ${r.bmi}</b>(${r.cat})<br>標準体重(BMI 22): ${r.std} kg<br><br>
+      <b>目安</b><br>エネルギー ${r.t.kcal} kcal<br>たんぱく質 ${r.t.protein} g<br>脂質 ${r.t.fat} g<br>炭水化物 ${r.t.carbs} g<br>食塩相当量 ${r.t.salt} g<br>
+      <p class="meta" style="margin-top:10px;line-height:1.6">計算方法: エネルギー = 基礎代謝(年齢・性別ごとの基準値 × 体重 = ${r.bmr} kcal) × 活動量(${ACTS[p.act][1]})。
+      たんぱく質・脂質・炭水化物はエネルギーの 15%・25%・60%。食塩は男性7.5g・女性6.5g。
+      今の体重を保つための一般的な目安で、体重を増減させるための値ではありません。妊娠中・授乳中の方、持病や医師の指示がある方は、指示された値を使ってください。</p>
+      <button id="bApply">この値を目標にする</button>`;
+    $('#bApply').onclick = () => {
+      NUT.forEach(([k]) => { $('#f_' + k).value = r.t[k]; });
+      toast('目標値の欄に反映しました。「保存」を押してください');
+    };
+  };
+
   $('#bSetCancel').onclick = closeView;
   $('#bSetSave').onclick = () => {
-    const v = {}; NUT.forEach(([k]) => { const x = numOf(k); v[k] = x != null && x > 0 ? x : DEFAULT_TARGETS[k]; });
+    const v = {};
+    NUT.forEach(([k]) => { const x = numOf(k); v[k] = x != null && x > 0 ? x : DEFAULT_TARGETS[k]; });
+    const p = readProfile();
+    if (valid(p)) v.profile = p; else if (t.profile) v.profile = t.profile;
     try { settings.set(v); } catch (e) { return toast('保存に失敗しました'); }
     closeView();
   };

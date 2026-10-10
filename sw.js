@@ -1,5 +1,5 @@
 // オフラインでも開けるようにするための小さなキャッシュ処理
-const CACHE = 'frozen-scan-v1';
+const CACHE = 'frozen-scan-v2';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {

@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f6f4a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>冷凍食品スキャナ</title>
+<style>
+  :root{--bg:#fff;--fg:#222;--sub:#666;--line:#ddd;--accent:#1f6f4a;--warn:#b33;--card:#f1f3f2}
+  @media (prefers-color-scheme:dark){:root{--bg:#161a18;--fg:#eee;--sub:#9aa;--line:#333;--accent:#5fc58f;--warn:#f08a8a;--card:#222a27}}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;background:var(--bg);color:var(--fg);display:flex;flex-direction:column}
+  main{flex:1;overflow-y:auto;padding-top:env(safe-area-inset-top)}
+  .page{padding:20px;max-width:640px;margin:0 auto}
+  h1{font-size:22px;margin:0}
+  h2{font-size:16px;margin:24px 0 6px}
+  .meta{font-size:12px;color:var(--sub);margin:4px 0 0}
+  .warn{font-size:12px;color:var(--warn);line-height:1.6;margin-top:24px}
+  p,.body{font-size:15px;line-height:1.7;margin:0;white-space:pre-wrap}
+  label{display:block;font-size:13px;color:var(--sub);margin:16px 0 4px}
+  input,textarea{width:100%;font:inherit;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
+  textarea{height:110px}
+  button{font:inherit;font-size:16px;font-weight:600;border:0;border-radius:10px;padding:14px;width:100%;margin-top:12px;background:var(--accent);color:#fff}
+  button.ghost{background:transparent;color:var(--accent)}
+  button.danger{background:transparent;color:var(--warn)}
+  .chip{font:inherit;font-size:14px;font-weight:600;border:0;border-radius:999px;padding:8px 14px;width:auto;margin:6px 6px 0 0;background:var(--card);color:var(--fg)}
+  .chip.del{color:var(--warn);margin:0}
+  .cam{position:relative;height:52vh;background:#000}
+  .cam video{width:100%;height:100%;object-fit:cover}
+  .reticle{position:absolute;left:10%;right:10%;top:35%;bottom:35%;border:2px solid #fff8;border-radius:10px;pointer-events:none}
+  .row{padding:12px 16px;border-bottom:1px solid var(--line);cursor:pointer}
+  .row b{font-size:16px;display:block}
+  .row span{font-size:12px;color:var(--sub);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .inline{display:flex;gap:8px}
+  .inline button{width:auto;margin:0;padding:10px 18px}
+  .datebar{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .datebar b{font-size:18px}
+  .datebar .chip{margin:0;font-size:20px;padding:4px 18px}
+  .nut{margin-top:14px}
+  .nutHead{display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px}
+  .bar{height:10px;border-radius:5px;background:var(--line);overflow:hidden}
+  .bar i{display:block;height:100%}
+  .entry{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .entry span{display:block;font-size:12px;color:var(--sub)}
+  .card{background:var(--card);border-radius:10px;padding:12px;margin-top:14px;font-size:14px;line-height:1.7}
+  nav{display:flex;border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);background:var(--bg)}
+  nav[hidden]{display:none}
+  nav button{flex:1;margin:0;border-radius:0;background:transparent;color:var(--sub);font-weight:400}
+  nav button.on{color:var(--accent);font-weight:700}
+  #toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#000c;color:#fff;padding:10px 16px;border-radius:8px;font-size:14px;max-width:90%;display:none}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<nav id="tabs">
+  <button data-tab="today">今日</button>
+  <button data-tab="scan">スキャン</button>
+  <button data-tab="list">保存した商品</button>
+</nav>
+<div id="toast"></div>
+<input type="file" id="importFile" accept="application/json,.json" hidden>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const app = $('#app'), tabs = $('#tabs');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const r1 = (x) => Math.round(x * 10) / 10;
+
+/* ---------- 日付 ---------- */
+const ymd = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const shiftDay = (s, n) => { const [y, m, d] = s.split('-').map(Number); return ymd(new Date(y, m - 1, d + n)); };
+const dayLabel = (s) => { const [y, m, d] = s.split('-').map(Number); return `${m}月${d}日(${'日月火水木金土'[new Date(y, m - 1, d).getDay()]})`; };
+
+const state = { tab: 'today', view: null, product: null, logDate: ymd(), stamp: ymd() };
+
+function toast(msg){
+  const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 3000);
+}
+
+/* ---------- 栄養素の定義 ---------- */
+// [キー, 表示名, 単位, 商品データ内の名前]
+const NUT = [
+  ['kcal', 'エネルギー', 'kcal', 'energy_kcal'],
+  ['protein', 'たんぱく質', 'g', 'protein_g'],
+  ['fat', '脂質', 'g', 'fat_g'],
+  ['carbs', '炭水化物', 'g', 'carbs_g'],
+  ['salt', '食塩相当量', 'g', 'salt_g']
+];
+function scaled(nutrition, m){
+  const o = {};
+  NUT.forEach(([k, , , src]) => {
+    const v = nutrition ? nutrition[src] : null;
+    o[k] = (v == null || v === '' || isNaN(Number(v))) ? null : r1(Number(v) * m);
+  });
+  return o;
+}
+const baseGrams = (basis) => { const m = String(basis || '').match(/(\d+(?:\.\d+)?)\s*[gｇ]/i); return m ? Number(m[1]) : null; };
+
+/* ---------- 保存(この端末のブラウザ内だけ) ---------- */
+const PREFIX = 'product:', LOGP = 'log:';
+const keysOf = (p) => { const out = []; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith(p)) out.push(k); } return out; };
+
+const db = {
+  all(){
+    return keysOf(PREFIX).map((k) => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } })
+      .filter(Boolean).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  },
+  get(jan){ try { const v = localStorage.getItem(PREFIX + jan); return v ? JSON.parse(v) : null; } catch { return null; } },
+  put(p){
+    p.updatedAt = Date.now();
+    try { localStorage.setItem(PREFIX + p.jan, JSON.stringify(p)); return true; }
+    catch (e) { toast('保存に失敗しました: ' + e.message); return false; }
+  },
+  del(jan){ localStorage.removeItem(PREFIX + jan); }
+};
+const logs = {
+  get(d){ try { return JSON.parse(localStorage.getItem(LOGP + d)) || []; } catch { return []; } },
+  set(d, arr){
+    try { arr.length ? localStorage.setItem(LOGP + d, JSON.stringify(arr)) : localStorage.removeItem(LOGP + d); return true; }
+    catch (e) { toast('保存に失敗しました: ' + e.message); return false; }
+  },
+  days(){ return keysOf(LOGP).map((k) => k.slice(LOGP.length)).sort(); }
+};
+const DEFAULT_TARGETS = { kcal: 2000, protein: 60, fat: 55, carbs: 300, salt: 7.5 };
+const settings = {
+  get(){ try { return { ...DEFAULT_TARGETS, ...JSON.parse(localStorage.getItem('settings') || '{}') }; } catch { return { ...DEFAULT_TARGETS }; } },
+  set(v){ localStorage.setItem('settings', JSON.stringify(v)); }
+};
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+
+/* ---------- Open Food Facts ---------- */
+async function fetchOFF(jan){
+  const url = `https://world.openfoodfacts.org/api/v2/product/${jan}.json?fields=product_name,ingredients_text,allergens_tags,nutriments`;
+  const json = await (await fetch(url)).json();
+  if (json.status !== 1 || !json.product.ingredients_text) return null;
+  const p = json.product, n = p.nutriments || {};
+  return {
+    jan, name: p.product_name || '(名称不明)', ingredients: p.ingredients_text,
+    allergens: (p.allergens_tags || []).map((a) => a.replace(/^.*:/, '')),
+    nutrition: { basis: '100gあたり', energy_kcal: n['energy-kcal_100g'], protein_g: n.proteins_100g,
+      fat_g: n.fat_100g, carbs_g: n.carbohydrates_100g, salt_g: n.salt_100g },
+    source: 'OpenFoodFacts'
+  };
+}
+
+/* ---------- スキャン ---------- */
+let stream = null, scanToken = 0, locked = false;
+function stopScan(){
+  scanToken++;
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+}
+async function startScan(){
+  const my = ++scanToken;
+  const msg = (t) => { const e = $('#scanmsg'); if (e) e.textContent = t; };
+  let s;
+  try { s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false }); }
+  catch (e) { msg('カメラを使えません(' + e.name + ')。ブラウザのカメラ許可を確認するか、下にJANを入力してください。'); return; }
+  const video = $('#video');
+  if (my !== scanToken || !video) { s.getTracks().forEach((t) => t.stop()); return; }
+  stream = s; video.srcObject = s; await video.play().catch(() => {});
+  if (!('BarcodeDetector' in window)) { msg('このブラウザはバーコード読み取りに未対応です。下にJANを入力してください。'); return; }
+  const detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8'] });
+  msg('バーコードを枠に合わせてください');
+  const loop = async () => {
+    if (my !== scanToken) return;
+    try {
+      const codes = await detector.detect(video);
+      if (codes.length && !locked) { locked = true; await handleJan(codes[0].rawValue); return; }
+    } catch {}
+    setTimeout(loop, 250);
+  };
+  loop();
+}
+async function handleJan(jan){
+  stopScan();
+  toast('検索中…');
+  let found = db.get(jan);
+  if (!found) {
+    try { found = await fetchOFF(jan); if (found) db.put(found); } catch {}
+  }
+  if (found) { state.product = found; state.view = 'result'; }
+  else { state.product = { jan }; state.view = 'edit'; }
+  render();
+}
+
+/* ---------- フォーム部品 ---------- */
+const tf = (id, label, val, area) => `<label>${label}</label>` + (area
+  ? `<textarea id="f_${id}">${esc(val)}</textarea>`
+  : `<input id="f_${id}" value="${esc(val)}">`);
+const nf = (id, label, val) => `<label>${label}</label><input id="f_${id}" inputmode="decimal" value="${esc(val)}">`;
+const numOf = (id) => { const x = $('#f_' + id).value.trim(); return x === '' || isNaN(Number(x)) ? null : Number(x); };
+
+/* ---------- 画面: 今日 ---------- */
+function renderToday(){
+  const d = state.logDate, entries = logs.get(d), t = settings.get();
+  const sum = { kcal: 0, protein: 0, fat: 0, carbs: 0, salt: 0 };
+  let missing = false;
+  entries.forEach((e) => NUT.forEach(([k]) => { if (e.n[k] == null) missing = true; else sum[k] += e.n[k]; }));
+  const fmt = (k, v) => k === 'kcal' ? Math.round(v) : r1(v);
+
+  app.innerHTML = `<div class="page">
+    <div class="datebar"><button class="chip" id="dPrev">‹</button><b>${dayLabel(d)}${d === ymd() ? '(今日)' : ''}</b><button class="chip" id="dNext">›</button></div>
+    ${d !== ymd() ? '<button class="chip" id="dToday">今日に戻る</button>' : ''}
+    ${NUT.map(([k, label, unit]) => {
+      const tg = Number(t[k]) || 0, pct = tg > 0 ? sum[k] / tg : 0, over = pct > 1 && k !== 'protein';
+      return `<div class="nut"><div class="nutHead"><span>${label}</span>
+        <span><b>${fmt(k, sum[k])}</b> / ${tg} ${unit}(${Math.round(pct * 100)}%)</span></div>
+        <div class="bar"><i style="width:${Math.min(pct, 1) * 100}%;background:${over ? 'var(--warn)' : 'var(--accent)'}"></i></div></div>`;
+    }).join('')}
+    ${missing ? '<p class="warn" style="margin-top:14px">※ 栄養成分が未入力の項目がある食品が含まれています。合計は実際より少ない可能性があります。</p>' : ''}
+    <h2>食べたもの</h2>
+    ${entries.length ? entries.map((e) => `<div class="entry"><div><b>${esc(e.name)}</b>
+      <span>${esc(e.label)} ・ ${e.n.kcal == null ? '—' : e.n.kcal} kcal</span></div>
+      <button class="chip del" data-id="${esc(e.id)}">削除</button></div>`).join('') : '<p class="meta">まだ記録がありません。</p>'}
+    <button id="bScan">スキャンして記録</button>
+    <button id="bPick" class="ghost">保存した商品から選ぶ</button>
+    <button id="bFree" class="ghost">自由入力で追加(ご飯・飲み物など)</button>
+    <button id="bSet" class="ghost">目標値を設定</button>
+  </div>`;
+
+  $('#dPrev').onclick = () => { state.logDate = shiftDay(d, -1); render(); };
+  $('#dNext').onclick = () => { state.logDate = shiftDay(d, 1); render(); };
+  if ($('#dToday')) $('#dToday').onclick = () => { state.logDate = ymd(); render(); };
+  document.querySelectorAll('.del').forEach((b) => b.onclick = () => {
+    if (!confirm('この記録を削除しますか?')) return;
+    logs.set(d, logs.get(d).filter((e) => String(e.id) !== b.dataset.id)); render();
+  });
+  $('#bScan').onclick = () => { state.tab = 'scan'; locked = false; render(); };
+  $('#bPick').onclick = () => { state.tab = 'list'; render(); };
+  $('#bFree').onclick = () => { state.view = 'free'; render(); };
+  $('#bSet').onclick = () => { state.view = 'settings'; render(); };
+}
+
+/* ---------- 画面: 記録の追加(商品から) ---------- */
+function renderLog(){
+  const p = state.product, base = p.nutrition || {}, bg = baseGrams(base.basis);
+  app.innerHTML = `<div class="page"><h1>食べた記録</h1>
+    <p class="meta">${esc(p.name)}</p><p class="meta">栄養成分の基準: ${esc(base.basis || '未設定')}</p>
+    <label>日付</label><input id="l_date" type="date" value="${state.logDate}">
+    ${bg ? `<label>食べた量 (g)</label><input id="l_g" inputmode="decimal" value="${bg}">` : ''}
+    <label>基準の何倍か(1 = 基準どおり)</label><input id="l_m" inputmode="decimal" value="1">
+    <div>${[0.5, 1, 1.5, 2].map((x) => `<button class="chip" data-m="${x}">×${x}</button>`).join('')}</div>
+    <div class="card" id="l_prev"></div>
+    <button id="bLogSave">記録する</button>
+    <button id="bLogCancel" class="ghost">キャンセル</button></div>`;
+
+  const mult = () => { const v = Number($('#l_m').value); return isFinite(v) && v > 0 ? v : 0; };
+  const prev = () => {
+    const s = scaled(base, mult());
+    $('#l_prev').innerHTML = '<b>この量の栄養成分</b><br>' + NUT.map(([k, l, u]) => `${l} ${s[k] == null ? '—' : s[k]} ${u}`).join('<br>');
+  };
+  $('#l_m').oninput = () => { if (bg) $('#l_g').value = r1(mult() * bg); prev(); };
+  if (bg) $('#l_g').oninput = () => { const g = Number($('#l_g').value); $('#l_m').value = isFinite(g) ? Math.round((g / bg) * 1000) / 1000 : ''; prev(); };
+  document.querySelectorAll('[data-m]').forEach((b) => b.onclick = () => { $('#l_m').value = b.dataset.m; $('#l_m').oninput(); });
+  prev();
+
+  $('#bLogCancel').onclick = () => { state.view = 'result'; render(); };
+  $('#bLogSave').onclick = () => {
+    const m = mult();
+    if (!m) return toast('量を入力してください');
+    const date = $('#l_date').value || state.logDate;
+    const entry = {
+      id: Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+      jan: p.jan, name: p.name,
+      label: bg ? `${r1(m * bg)}g` : `×${m}`,
+      n: scaled(base, m)
+    };
+    const arr = logs.get(date); arr.push(entry);
+    if (!logs.set(date, arr)) return;
+    state.logDate = date; state.tab = 'today'; state.view = null; state.product = null; locked = false;
+    toast('記録しました'); render();
+  };
+}
+
+/* ---------- 画面: 自由入力で追加 ---------- */
+function renderFree(){
+  app.innerHTML = `<div class="page"><h1>自由入力で追加</h1>
+    <label>日付</label><input id="f_date" type="date" value="${state.logDate}">
+    ${tf('name', '食べたもの(例: ご飯 150g)', '')}
+    ${NUT.map(([k, l, u]) => nf(k, `${l} (${u})`, '')).join('')}
+    <button id="bFreeSave">記録する</button>
+    <button id="bFreeCancel" class="ghost">キャンセル</button></div>`;
+  $('#bFreeCancel').onclick = closeView;
+  $('#bFreeSave').onclick = () => {
+    const date = $('#f_date').value || state.logDate;
+    const n = {}; NUT.forEach(([k]) => n[k] = numOf(k));
+    const entry = { id: Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+      name: $('#f_name').value.trim() || '(名称未入力)', label: '手入力', n };
+    const arr = logs.get(date); arr.push(entry);
+    if (!logs.set(date, arr)) return;
+    state.logDate = date; state.tab = 'today'; toast('記録しました'); closeView();
+  };
+}
+
+/* ---------- 画面: 目標値 ---------- */
+function renderSettings(){
+  const t = settings.get();
+  app.innerHTML = `<div class="page"><h1>1日の目標値</h1>
+    <p class="meta" style="line-height:1.6">初期値は一般的な目安です。医師や管理栄養士から指示がある場合は、その値を入れてください。</p>
+    ${NUT.map(([k, l, u]) => nf(k, `${l} (${u})`, t[k])).join('')}
+    <button id="bSetSave">保存</button>
+    <button id="bSetCancel" class="ghost">キャンセル</button></div>`;
+  $('#bSetCancel').onclick = closeView;
+  $('#bSetSave').onclick = () => {
+    const v = {}; NUT.forEach(([k]) => { const x = numOf(k); v[k] = x != null && x > 0 ? x : DEFAULT_TARGETS[k]; });
+    try { settings.set(v); } catch (e) { return toast('保存に失敗しました'); }
+    closeView();
+  };
+}
+
+/* ---------- 画面: スキャン ---------- */
+function renderScan(){
+  app.innerHTML = `
+    <div class="cam"><video id="video" playsinline muted></video><div class="reticle"></div></div>
+    <div class="page">
+      <p class="meta" id="scanmsg">カメラを起動中…</p>
+      <label>読めないときはJAN(8桁か13桁)を入力</label>
+      <div class="inline">
+        <input id="janInput" inputmode="numeric" maxlength="13" placeholder="4901234567894">
+        <button id="janGo">検索</button>
+      </div>
+    </div>`;
+  $('#janGo').onclick = () => {
+    const v = $('#janInput').value.trim();
+    if (!/^(\d{8}|\d{13})$/.test(v)) return toast('8桁か13桁の数字を入力してください');
+    locked = true; handleJan(v);
+  };
+}
+
+/* ---------- 画面: 商品の詳細 ---------- */
+function renderResult(){
+  const p = state.product, n = p.nutrition;
+  const v = (x) => (x ?? '—');
+  app.innerHTML = `<div class="page">
+    <h1>${esc(p.name)}</h1>
+    <p class="meta">JAN ${esc(p.jan)} / 出典: ${esc(p.source)}</p>
+    <h2>原材料</h2><div class="body">${esc(p.ingredients || '—')}</div>
+    <h2>アレルゲン</h2><div class="body">${p.allergens && p.allergens.length ? esc(p.allergens.join('、')) : 'データなし'}</div>
+    <h2>栄養成分${n && n.basis ? '(' + esc(n.basis) + ')' : ''}</h2>
+    <div class="body">${n ? `エネルギー ${v(n.energy_kcal)} kcal\nたんぱく質 ${v(n.protein_g)} g\n脂質 ${v(n.fat_g)} g\n炭水化物 ${v(n.carbs_g)} g\n食塩相当量 ${v(n.salt_g)} g` : 'データなし'}</div>
+    ${p.source !== '手入力' ? '<p class="warn">※ 外部データベースの情報です。リニューアルで変わっている場合があるので、アレルギー等の判断は必ず現物の表示で確認してください。</p>' : ''}
+    <button id="bLog">食べた記録をつける</button>
+    <button id="bEdit" class="ghost">修正する</button>
+    <button id="bClose" class="ghost">閉じる</button>
+    <button id="bDel" class="danger">この商品を削除</button>
+  </div>`;
+  $('#bLog').onclick = () => { state.view = 'log'; render(); };
+  $('#bEdit').onclick = () => { state.view = 'edit'; render(); };
+  $('#bClose').onclick = closeView;
+  $('#bDel').onclick = () => {
+    if (confirm('「' + p.name + '」を削除しますか?(過去の食事記録は残ります)')) { db.del(p.jan); closeView(); }
+  };
+}
+
+/* ---------- 画面: 商品の入力・修正 ---------- */
+function renderEdit(){
+  const p = state.product, n = p.nutrition || {};
+  app.innerHTML = `<div class="page">
+    <h1>商品情報を入力</h1><p class="meta">JAN ${esc(p.jan)}</p>
+    ${tf('name', '商品名', p.name)}
+    ${tf('ingredients', '原材料名', p.ingredients, true)}
+    ${tf('allergens', 'アレルゲン(読点かスペース区切り)', (p.allergens || []).join('、'))}
+    ${tf('basis', '栄養成分の基準(例: 1食(200g)あたり)', n.basis || '1食あたり')}
+    ${nf('kcal', 'エネルギー (kcal)', n.energy_kcal)}
+    ${nf('protein', 'たんぱく質 (g)', n.protein_g)}
+    ${nf('fat', '脂質 (g)', n.fat_g)}
+    ${nf('carbs', '炭水化物 (g)', n.carbs_g)}
+    ${nf('salt', '食塩相当量 (g)', n.salt_g)}
+    <p class="meta" style="margin-top:10px">基準に「(200g)」のようにグラム数を入れると、記録のときにグラム数で量を指定できます。</p>
+    <button id="bSave">保存</button>
+    <button id="bCancel" class="ghost">キャンセル</button>
+  </div>`;
+  $('#bSave').onclick = () => {
+    const np = {
+      jan: p.jan,
+      name: $('#f_name').value.trim() || '(名称未入力)',
+      ingredients: $('#f_ingredients').value.trim(),
+      allergens: $('#f_allergens').value.split(/[、,，\s]+/).filter(Boolean),
+      nutrition: { basis: $('#f_basis').value.trim(), energy_kcal: numOf('kcal'), protein_g: numOf('protein'),
+        fat_g: numOf('fat'), carbs_g: numOf('carbs'), salt_g: numOf('salt') },
+      source: '手入力'
+    };
+    if (!db.put(np)) return;
+    state.product = np; state.view = 'result'; render();
+  };
+  $('#bCancel').onclick = () => { if (p.name) { state.view = 'result'; render(); } else closeView(); };
+}
+
+/* ---------- 画面: 保存した商品の一覧 ---------- */
+function renderList(){
+  const total = db.all().length;
+  app.innerHTML = `<div class="page" style="padding-bottom:0">
+      <h1>保存した商品(${total})</h1>
+      <input id="q" type="search" placeholder="商品名・原材料・アレルゲン・JANで検索" style="margin-top:12px">
+    </div>
+    <div id="rows"></div>
+    <div class="page" style="padding-top:8px">
+      <button id="bExport" class="ghost">JSONで書き出す(商品・食事記録のバックアップ)</button>
+      <button id="bImport" class="ghost">JSONから読み込む(復元)</button>
+    </div>`;
+  const rows = () => {
+    const kw = $('#q').value.trim().toLowerCase();
+    const items = db.all().filter((p) => !kw ||
+      [p.name, p.jan, p.ingredients, (p.allergens || []).join(' ')].join(' ').toLowerCase().includes(kw));
+    $('#rows').innerHTML = items.length ? items.map((p) => `
+      <div class="row" data-jan="${esc(p.jan)}"><b>${esc(p.name)}</b>
+      <span>${p.allergens && p.allergens.length ? 'アレルゲン: ' + esc(p.allergens.join('、')) : 'アレルゲン: データなし'}</span></div>`).join('')
+      : `<p class="page">${total ? '該当する商品がありません。' : 'まだ商品がありません。スキャンして登録しましょう。'}</p>`;
+    document.querySelectorAll('.row').forEach((r) => r.onclick = () => {
+      state.product = db.get(r.dataset.jan); state.view = 'result'; render();
+    });
+  };
+  $('#q').oninput = rows; rows();
+  $('#bExport').onclick = exportJson;
+  $('#bImport').onclick = () => $('#importFile').click();
+}
+
+/* ---------- 書き出し / 読み込み ---------- */
+function buildBackup(){
+  const days = {}; logs.days().forEach((d) => days[d] = logs.get(d));
+  return { version: 2, exportedAt: new Date().toISOString(), products: db.all(), logs: days, settings: settings.get() };
+}
+async function exportJson(){
+  const data = buildBackup();
+  if (!data.products.length && !Object.keys(data.logs).length) return toast('書き出すデータがありません');
+  const file = new File([JSON.stringify(data, null, 2)], `frozen-scan-backup-${ymd()}.json`, { type: 'application/json' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); return; }
+    catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = file.name; a.click();
+  toast('ダウンロードフォルダに保存しました');
+}
+$('#importFile').onchange = async (e) => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  try {
+    const raw = JSON.parse(await f.text());
+    const products = (Array.isArray(raw) ? raw : raw.products || []).filter((p) => p && p.jan);
+    const days = (!Array.isArray(raw) && raw.logs) || {};
+    const nDays = Object.keys(days).length;
+    if (!confirm(`商品${products.length}件、食事記録${nDays}日分を読み込みます。\n同じJANの商品は上書きされます。よろしいですか?`)) return;
+    products.forEach((p) => db.put(p));
+    Object.entries(days).forEach(([d, arr]) => {
+      const cur = logs.get(d), ids = new Set(cur.map((x) => x.id));
+      logs.set(d, cur.concat((arr || []).filter((x) => x && !ids.has(x.id))));
+    });
+    if (!Array.isArray(raw) && raw.settings) { try { settings.set({ ...DEFAULT_TARGETS, ...raw.settings }); } catch {} }
+    toast('読み込みました'); render();
+  } catch (err) { toast('読み込めませんでした: ' + err.message); }
+};
+
+/* ---------- 画面切り替え ---------- */
+function closeView(){ state.view = null; state.product = null; locked = false; render(); }
+tabs.querySelectorAll('button').forEach((b) => b.onclick = () => { state.tab = b.dataset.tab; locked = false; render(); });
+
+function render(){
+  stopScan();
+  tabs.hidden = !!state.view;
+  tabs.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.tab === state.tab));
+  app.scrollTop = 0;
+  if (state.view === 'edit') renderEdit();
+  else if (state.view === 'result') renderResult();
+  else if (state.view === 'log') renderLog();
+  else if (state.view === 'free') renderFree();
+  else if (state.view === 'settings') renderSettings();
+  else if (state.tab === 'today') renderToday();
+  else if (state.tab === 'scan') { renderScan(); startScan(); }
+  else renderList();
+}
+
+// 日付をまたいだら「今日」を切り替える
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  const now = ymd();
+  if (now !== state.stamp) {
+    if (state.logDate === state.stamp) state.logDate = now;
+    state.stamp = now;
+    if (!state.view) render();
+  }
+});
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+render();
+</script>
+</body>
+</html>

@@ -47,6 +47,7 @@
   .entry{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}
   .entry span{display:block;font-size:12px;color:var(--sub)}
   summary{font-size:15px;font-weight:600;padding:8px 0;cursor:pointer}
+  .mh{display:flex;justify-content:space-between;font-size:15px;font-weight:700;margin:18px 0 0;padding-bottom:4px;border-bottom:2px solid var(--accent)}
   .card{background:var(--card);border-radius:10px;padding:12px;margin-top:14px;font-size:14px;line-height:1.7}
   nav{display:flex;border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);background:var(--bg)}
   nav[hidden]{display:none}
@@ -70,6 +71,9 @@ const $ = (s) => document.querySelector(s);
 const app = $('#app'), tabs = $('#tabs');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const r1 = (x) => Math.round(x * 10) / 10;
+const MEALS = [['morning', '朝'], ['lunch', '昼'], ['dinner', '晩'], ['snack', '間食']];
+const defaultMeal = () => { const hr = new Date().getHours(); return hr < 10 ? 'morning' : hr < 15 ? 'lunch' : hr < 17 ? 'snack' : 'dinner'; };
+const mealSelect = (id) => `<label>食事</label><select id="${id}">${MEALS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>`;
 const janLabel = (j) => String(j).startsWith('m-') ? 'バーコードなし' : 'JAN ' + j;
 const newManual = () => { state.product = { jan: 'm-' + Date.now().toString(36) }; state.view = 'edit'; render(); };
 
@@ -100,7 +104,10 @@ const EXTRA = [
   ['magnesium', 'マグネシウム', 'mg', 'magnesium_mg'], ['iron', '鉄', 'mg', 'iron_mg'], ['zinc', '亜鉛', 'mg', 'zinc_mg'],
   ['vita', 'ビタミンA', 'μgRAE', 'vita_ug'], ['vitd', 'ビタミンD', 'μg', 'vitd_ug'],
   ['vitb1', 'ビタミンB1', 'mg', 'vitb1_mg'], ['vitb2', 'ビタミンB2', 'mg', 'vitb2_mg'],
-  ['vitc', 'ビタミンC', 'mg', 'vitc_mg'], ['folate', '葉酸', 'μg', 'folate_ug']
+  ['vitb6', 'ビタミンB6', 'mg', 'vitb6_mg'], ['vitb12', 'ビタミンB12', 'μg', 'vitb12_ug'],
+  ['niacin', 'ナイアシン', 'mgNE', 'niacin_mg'], ['pantothenic', 'パントテン酸', 'mg', 'pantothenic_mg'],
+  ['biotin', 'ビオチン', 'μg', 'biotin_ug'], ['folate', '葉酸', 'μg', 'folate_ug'],
+  ['vitc', 'ビタミンC', 'mg', 'vitc_mg'], ['vite', 'ビタミンE', 'mg', 'vite_mg']
 ];
 const ALL = NUT.concat(EXTRA);
 const LIMIT = ['kcal', 'fat', 'carbs', 'salt', 'satfat']; // 超えると赤くする項目
@@ -140,7 +147,7 @@ const logs = {
   },
   days(){ return keysOf(LOGP).map((k) => k.slice(LOGP.length)).sort(); }
 };
-const DEFAULT_TARGETS = { kcal: 2000, protein: 60, fat: 55, carbs: 300, salt: 7.5, fiber: 20, satfat: 15, potassium: 2800, calcium: 700, magnesium: 330, iron: 8, zinc: 9, vita: 800, vitd: 9, vitb1: 1.2, vitb2: 1.4, vitc: 100, folate: 240 };
+const DEFAULT_TARGETS = { kcal: 2000, protein: 60, fat: 55, carbs: 300, salt: 7.5, fiber: 20, satfat: 15, potassium: 2800, calcium: 700, magnesium: 330, iron: 8, zinc: 9, vita: 800, vitd: 9, vitb1: 1.2, vitb2: 1.4, vitc: 100, folate: 240, vitb6: 1.2, vitb12: 2.4, niacin: 13, pantothenic: 5, biotin: 50, vite: 5.5 };
 const settings = {
   get(){ try { return { ...DEFAULT_TARGETS, ...JSON.parse(localStorage.getItem('settings') || '{}') }; } catch { return { ...DEFAULT_TARGETS }; } },
   set(v){ localStorage.setItem('settings', JSON.stringify(v)); }
@@ -151,7 +158,9 @@ if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
 const OFFX = { fiber_g: ['fiber_100g', 1], satfat_g: ['saturated-fat_100g', 1], potassium_mg: ['potassium_100g', 1000],
   calcium_mg: ['calcium_100g', 1000], magnesium_mg: ['magnesium_100g', 1000], iron_mg: ['iron_100g', 1000], zinc_mg: ['zinc_100g', 1000],
   vita_ug: ['vitamin-a_100g', 1e6], vitd_ug: ['vitamin-d_100g', 1e6], vitb1_mg: ['vitamin-b1_100g', 1000],
-  vitb2_mg: ['vitamin-b2_100g', 1000], vitc_mg: ['vitamin-c_100g', 1000], folate_ug: ['vitamin-b9_100g', 1e6] };
+  vitb2_mg: ['vitamin-b2_100g', 1000], vitc_mg: ['vitamin-c_100g', 1000], folate_ug: ['vitamin-b9_100g', 1e6],
+  vitb6_mg: ['vitamin-b6_100g', 1000], vitb12_ug: ['vitamin-b12_100g', 1e6], niacin_mg: ['vitamin-pp_100g', 1000],
+  pantothenic_mg: ['pantothenic-acid_100g', 1000], biotin_ug: ['biotin_100g', 1e6], vite_mg: ['vitamin-e_100g', 1000] };
 const offExtras = (n) => { const o = {}; for (const [k, [f, m]] of Object.entries(OFFX)) if (n[f] != null && !isNaN(Number(n[f]))) o[k] = Math.round(Number(n[f]) * m * 100) / 100; return o; };
 async function fetchOFF(jan){
   const url = `https://world.openfoodfacts.org/api/v2/product/${jan}.json?fields=product_name,ingredients_text,allergens_tags,nutriments`;
@@ -230,6 +239,15 @@ function renderToday(){
       <div class="bar"><i style="width:${Math.min(pct, 1) * 100}%;background:${over ? 'var(--warn)' : 'var(--accent)'}"></i></div>${note}</div>`;
   };
 
+  const entryHtml = (e) => `<div class="entry"><div><b>${esc(e.name)}</b>
+      <span>${esc(e.label)} ・ ${e.n.kcal == null ? '—' : e.n.kcal} kcal</span></div>
+      <button class="chip del" data-id="${esc(e.id)}">削除</button></div>`;
+  const groups = MEALS.concat([['', 'その他']]).map(([k, l]) => {
+    const list = entries.filter((e) => k === '' ? !MEALS.some((m) => m[0] === e.meal) : e.meal === k);
+    if (!list.length) return '';
+    const kc = list.reduce((a, e) => a + (e.n.kcal || 0), 0);
+    return `<div class="mh"><span>${l}</span><span>${Math.round(kc)} kcal</span></div>` + list.map(entryHtml).join('');
+  }).join('');
   app.innerHTML = `<div class="page">
     <div class="datebar"><button class="chip" id="dPrev">‹</button><b>${dayLabel(d)}${d === ymd() ? '(今日)' : ''}</b><button class="chip" id="dNext">›</button></div>
     ${d !== ymd() ? '<button class="chip" id="dToday">今日に戻る</button>' : ''}
@@ -240,9 +258,7 @@ function renderToday(){
     </details>
     ${missing ? '<p class="warn" style="margin-top:14px">※ 栄養成分が未入力の項目がある食品が含まれています。合計は実際より少ない可能性があります。</p>' : ''}
     <h2>食べたもの</h2>
-    ${entries.length ? entries.map((e) => `<div class="entry"><div><b>${esc(e.name)}</b>
-      <span>${esc(e.label)} ・ ${e.n.kcal == null ? '—' : e.n.kcal} kcal</span></div>
-      <button class="chip del" data-id="${esc(e.id)}">削除</button></div>`).join('') : '<p class="meta">まだ記録がありません。</p>'}
+    ${entries.length ? groups : '<p class="meta">まだ記録がありません。</p>'}
     <button id="bScan">スキャンして記録</button>
     <button id="bPick" class="ghost">保存した商品から選ぶ</button>
     <button id="bFree" class="ghost">自由入力で追加(ご飯・飲み物など)</button>
@@ -268,6 +284,7 @@ function renderLog(){
   app.innerHTML = `<div class="page"><h1>食べた記録</h1>
     <p class="meta">${esc(p.name)}</p><p class="meta">栄養成分の基準: ${esc(base.basis || '未設定')}</p>
     <label>日付</label><input id="l_date" type="date" value="${state.logDate}">
+    ${mealSelect('l_meal')}
     ${bg ? `<label>食べた量 (g)</label><input id="l_g" inputmode="decimal" value="${bg}">` : ''}
     <label>${p.unit ? `飲んだ・食べた数(${esc(p.unit)})` : '基準の何倍か(1 = 基準どおり)'}</label><input id="l_m" inputmode="decimal" value="1">
     <div>${(p.unit ? [1, 2, 3, 4] : [0.5, 1, 1.5, 2]).map((x) => `<button class="chip" data-m="${x}">${p.unit ? x + esc(p.unit) : '×' + x}</button>`).join('')}</div>
@@ -285,6 +302,7 @@ function renderLog(){
   document.querySelectorAll('[data-m]').forEach((b) => b.onclick = () => { $('#l_m').value = b.dataset.m; $('#l_m').oninput(); });
   prev();
 
+  $('#l_meal').value = defaultMeal();
   $('#bLogCancel').onclick = () => { state.view = 'result'; render(); };
   $('#bLogSave').onclick = () => {
     const m = mult();
@@ -292,7 +310,7 @@ function renderLog(){
     const date = $('#l_date').value || state.logDate;
     const entry = {
       id: Date.now() + '-' + Math.random().toString(36).slice(2, 6),
-      jan: p.jan, name: p.name,
+      jan: p.jan, name: p.name, meal: $('#l_meal').value,
       label: p.unit ? `${m}${p.unit}` : bg ? `${r1(m * bg)}g` : `×${m}`,
       n: scaled(base, m)
     };
@@ -307,17 +325,19 @@ function renderLog(){
 function renderFree(){
   app.innerHTML = `<div class="page"><h1>自由入力で追加</h1>
     <label>日付</label><input id="f_date" type="date" value="${state.logDate}">
+    ${mealSelect('f_meal')}
     ${tf('name', '食べたもの(例: ご飯 150g)', '')}
     ${NUT.map(([k, l, u]) => nf(k, `${l} (${u})`, '')).join('')}
     <details><summary>ほかの栄養成分(任意)</summary>${EXTRA.map(([k, l, u]) => nf(k, `${l} (${u})`, '')).join('')}</details>
     <button id="bFreeSave">記録する</button>
     <button id="bFreeCancel" class="ghost">キャンセル</button></div>`;
+  $('#f_meal').value = defaultMeal();
   $('#bFreeCancel').onclick = closeView;
   $('#bFreeSave').onclick = () => {
     const date = $('#f_date').value || state.logDate;
     const n = {}; ALL.forEach(([k]) => n[k] = numOf(k));
     const entry = { id: Date.now() + '-' + Math.random().toString(36).slice(2, 6),
-      name: $('#f_name').value.trim() || '(名称未入力)', label: '手入力', n };
+      name: $('#f_name').value.trim() || '(名称未入力)', label: '手入力', meal: $('#f_meal').value, n };
     const arr = logs.get(date); arr.push(entry);
     if (!logs.set(date, arr)) return;
     state.logDate = date; state.tab = 'today'; toast('記録しました'); closeView();
@@ -353,7 +373,8 @@ function calcTargets(pr){
       salt: M ? 7.5 : 6.5,
       fiber: M ? 21 : 18, satfat: r1(kcal * 0.07 / 9), potassium: M ? 3000 : 2600, calcium: M ? 750 : 650,
       magnesium: M ? 370 : 290, iron: M ? 7.5 : (pr.age < 50 ? 10.5 : 6.5), zinc: M ? 11 : 8,
-      vita: M ? 900 : 700, vitd: 9, vitb1: M ? 1.4 : 1.1, vitb2: M ? 1.6 : 1.2, vitc: 100, folate: 240
+      vita: M ? 900 : 700, vitd: 9, vitb1: M ? 1.4 : 1.1, vitb2: M ? 1.6 : 1.2, vitc: 100, folate: 240,
+      vitb6: M ? 1.4 : 1.1, vitb12: 2.4, niacin: M ? 15 : 11, pantothenic: 5, biotin: 50, vite: M ? 6 : 5
     }
   };
 }
